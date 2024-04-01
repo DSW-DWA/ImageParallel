@@ -19,12 +19,24 @@ namespace ImageParallel
     {
         private int _parallelProcessNum = 16;
         private int _shift = 50;
-
         private Bitmap originalImage;
+
+        private string imagesSaveDirectory;
+        private string logFilePath; 
 
         public MainWindow()
         {
             InitializeComponent();
+
+            imagesSaveDirectory = System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "SavedImages");
+            logFilePath = System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "image_transformations_log.csv");
+
+            Directory.CreateDirectory(imagesSaveDirectory); 
+
+            if (!File.Exists(logFilePath))
+            {
+                File.WriteAllText(logFilePath, "Timestamp;Image Size;Transformation;Duration (ms);Saved File Path\n");
+            }
         }
 
         private void LoadImageButton_Click(object sender, RoutedEventArgs e)
@@ -61,9 +73,15 @@ namespace ImageParallel
             if (originalImage != null)
             {
                 Bitmap modifiedImage = new Bitmap(originalImage);
+                Stopwatch stopwatch = Stopwatch.StartNew(); // Start timing
                 transformation(modifiedImage);
+                stopwatch.Stop(); // Stop timing
 
                 ModifiedImage.Source = ConvertBitmapToBitmapImage(modifiedImage);
+
+                // Log results and save the image
+                string transformationName = transformation.Method.Name.Replace("ProcessImage", "");
+                SaveImageAndLogResults(modifiedImage, transformationName, stopwatch.ElapsedMilliseconds);
             }
             else
             {
@@ -258,6 +276,22 @@ namespace ImageParallel
                 bitmapImage.EndInit();
                 return bitmapImage;
             }
+        }
+
+        private void SaveImageAndLogResults(Bitmap image, string transformationType, long duration)
+        {
+            string fileName = $"{transformationType}_{DateTime.Now:yyyyMMddHHmmss}.bmp";
+            string filePath = System.IO.Path.Combine(imagesSaveDirectory, fileName);
+
+            image.Save(filePath);
+
+            LogResults(image.Width, image.Height, transformationType, duration, filePath);
+        }
+
+        private void LogResults(int width, int height, string transformationType, long duration, string filePath)
+        {
+            string logLine = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss};{width}x{height};{transformationType};{duration};{filePath}\n";
+            File.AppendAllText(logFilePath, logLine);
         }
     }
 }
