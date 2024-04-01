@@ -93,7 +93,7 @@ namespace ImageParallel
         {
             ApplyNegative(image, 0, image.Width , image.Height);
             ApplyHorizontalSymmetry(image, 0, image.Width, image.Height);
-            ApplyCyclicShift(image, _shift, 0, image.Width, image.Height);
+            ApplyCyclicShift(image, _shift, 0, image.Width, image.Height, image.Width, new Bitmap(image));
         }
 
         private void ProcessImageParallelFor(Bitmap image)
@@ -121,11 +121,15 @@ namespace ImageParallel
                     Console.WriteLine(ex);
                 }
             });
+
+            var original = new Bitmap(image);
+            var width = image.Width;
+
             Parallel.For(0, _parallelProcessNum, i =>
             {
                 try
                 {
-                    ApplyCyclicShift(image, _shift, i * step, (i + 1) * step, height);
+                    ApplyCyclicShift(image, _shift, i * step, (i + 1) * step, height, width, original);
                 }
                 catch (Exception ex)
                 {
@@ -186,6 +190,8 @@ namespace ImageParallel
             Task.WaitAll(tasks);
 
             tasks = new Task[_parallelProcessNum];
+            var orignal = new Bitmap(image);
+            var width = image.Width;
 
             for (int i = 0; i < tasks.Length; i++)
             {
@@ -194,7 +200,7 @@ namespace ImageParallel
                     var j = (int)obj;
                     try
                     {
-                        ApplyCyclicShift(image,_shift, j * step, (j + 1) * step, height);
+                        ApplyCyclicShift(image,_shift, j * step, (j + 1) * step, height, width, orignal);
                     }
                     catch (Exception ex)
                     {
@@ -241,23 +247,27 @@ namespace ImageParallel
             }
         }
 
-        private void ApplyCyclicShift(Bitmap image, int shift, int startX, int endX, int height)
+        private void ApplyCyclicShift(Bitmap image, int shift, int startX, int endX, int height, int width, Bitmap temp)
         {
-            shift = shift % image.Width;
-            Bitmap temp = new Bitmap(image);
+            shift = shift % width;
+            /*Bitmap temp = new Bitmap(image);*/
 
             for (int y = 0; y < height; y++)
             {
                 for (int x = startX; x < endX; x++)
-                {
+                {   
+                    int newX = (x + shift) % width;
+                    if (newX < 0)
+                        newX += width;
+
+                    
                     lock (image)
                     {
-                        int newX = (x + shift) % image.Width;
-                        if (newX < 0)
-                            newX += image.Width;
-
-                        Color color = temp.GetPixel(x, y);
-                        image.SetPixel(newX, y, color);
+                        lock (temp)
+                        {
+                            Color color = temp.GetPixel(x, y);
+                            image.SetPixel(newX, y, color);
+                        }
                     }
                 }
             }
