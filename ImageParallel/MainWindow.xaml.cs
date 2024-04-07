@@ -1,23 +1,26 @@
 ﻿using System.Diagnostics;
 using System.Drawing;
 using System.IO;
-using System.Text;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
 using Color = System.Drawing.Color;
 
 namespace ImageParallel
 {
+    public class TaskData
+    {
+        public Bitmap Image { get; set; }
+        public int I { get; set; }
+
+        public TaskData(Bitmap image, int i)
+        {
+            Image = image;
+            I = i;
+        }
+    }
     public partial class MainWindow : Window
     {
-        private int _parallelProcessNum = 16;
+        private int _parallelProcessNum = 8;
         private int _shift = 50;
         private Bitmap originalImage;
 
@@ -73,13 +76,12 @@ namespace ImageParallel
             if (originalImage != null)
             {
                 Bitmap modifiedImage = new Bitmap(originalImage);
-                Stopwatch stopwatch = Stopwatch.StartNew(); // Start timing
+                Stopwatch stopwatch = Stopwatch.StartNew();
                 transformation(modifiedImage);
-                stopwatch.Stop(); // Stop timing
+                stopwatch.Stop();
 
                 ModifiedImage.Source = ConvertBitmapToBitmapImage(modifiedImage);
 
-                // Log results and save the image
                 string transformationName = transformation.Method.Name.Replace("ProcessImage", "");
                 SaveImageAndLogResults(modifiedImage, transformationName, stopwatch.ElapsedMilliseconds);
             }
@@ -91,51 +93,91 @@ namespace ImageParallel
 
         private void ProcessImageSequentially(Bitmap image)
         {
-            ApplyNegative(image, 0, image.Width , image.Height);
-            ApplyHorizontalSymmetry(image, 0, image.Width, image.Height);
-            ApplyCyclicShift(image, _shift, 0, image.Width, image.Height, image.Width, new Bitmap(image));
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            ApplyNegative(image);
+            stopwatch.Stop();
+            Debug.WriteLine($"Sequentially negative -{stopwatch.ElapsedMilliseconds}");
+
+            stopwatch = Stopwatch.StartNew();
+            ApplyHorizontalSymmetry(image);
+            stopwatch.Stop();
+            Debug.WriteLine($"Sequentially horizontal symmetry - " + stopwatch.ElapsedMilliseconds);
+
+            stopwatch = Stopwatch.StartNew();
+            ApplyCyclicShift(image);
+            stopwatch.Stop();
+            Debug.WriteLine($"Sequentially cyclic shift - " + stopwatch.ElapsedMilliseconds);
         }
 
         private void ProcessImageParallelFor(Bitmap image)
         {
             var step = image.Width / _parallelProcessNum;
             var height = image.Height;
+
+            var list = new List<Bitmap>();
+
+            for (var i = 0; i < _parallelProcessNum; i++)
+            {
+                var rect = new Rectangle(i * step, 0, step, height);
+                list.Add(image.Clone(rect, image.PixelFormat));
+            }
+
+            Stopwatch stopwatch = Stopwatch.StartNew();
             Parallel.For(0, _parallelProcessNum, i =>
             {
                 try
                 {
-                    ApplyNegative(image, i * step, (i + 1) * step, height);
+                    ApplyNegative(list[i]);
                 } catch (Exception ex)
                 {
                     Console.WriteLine(ex);
                 }
             });
+            stopwatch.Stop();
+            Debug.WriteLine($"ParallelFor negative - " + stopwatch.ElapsedMilliseconds);
+
+            stopwatch = Stopwatch.StartNew();
             Parallel.For(0, _parallelProcessNum, i =>
             {
                 try
                 {
-                    ApplyHorizontalSymmetry(image, i * step, (i + 1) * step, height);
+                    ApplyHorizontalSymmetry(list[i]);
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine(ex);
                 }
             });
+            stopwatch.Stop();
+            Debug.WriteLine($"ParallelFor horizontal symmetry - " + stopwatch.ElapsedMilliseconds);
 
-            var original = new Bitmap(image);
-            var width = image.Width;
-
+            stopwatch = Stopwatch.StartNew();
             Parallel.For(0, _parallelProcessNum, i =>
             {
                 try
                 {
-                    ApplyCyclicShift(image, _shift, i * step, (i + 1) * step, height, width, original);
+                    ApplyCyclicShift(list[i]);
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine(ex);
                 }
             });
+            stopwatch.Stop();
+            Debug.WriteLine($"ParallelFor cyclic shift - " + stopwatch.ElapsedMilliseconds);
+
+            for (var i = 0; i < _parallelProcessNum; i++)
+            {
+                for (var y = 0; y < height; y++)
+                {
+                    for (var x = 0; x < step; x++)
+                    {
+                        image.SetPixel(x + i * step, y, list[i].GetPixel(x, y));
+                    }
+                }
+
+                list[i].Dispose();
+            }
 
         }
 
@@ -143,132 +185,152 @@ namespace ImageParallel
         {
             var step = image.Width / _parallelProcessNum;
             var height = image.Height;
+
+            var list = new List<Bitmap>();
+
+            for (var i = 0; i < _parallelProcessNum; i++)
+            {
+                var rect = new Rectangle(i * step, 0, step, height);
+                list.Add(image.Clone(rect, image.PixelFormat));
+            }
+
             var tasks = new Task[_parallelProcessNum];
 
+            Stopwatch stopwatch = Stopwatch.StartNew();
             for (int i = 0; i < tasks.Length; i++)
             {
                 tasks[i] = new Task((object obj) =>
                 {
-                    var j = (int)obj;
+                    var data = (TaskData)obj;
                     try
                     {
-                        ApplyNegative(image, j * step, (j + 1) * step, height);
+                        ApplyNegative(data.Image);
+                        list[data.I] = data.Image;
+
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine(ex);
                     }
-                }, i);
+                }, new TaskData(list[i], i));
 
                 tasks[i].Start();
 
             }
 
             Task.WaitAll(tasks);
+            stopwatch.Stop();
+            Debug.WriteLine($"Tasks negative - " + stopwatch.ElapsedMilliseconds);
 
             tasks = new Task[_parallelProcessNum];
 
+            stopwatch = Stopwatch.StartNew();
             for (int i = 0; i < tasks.Length; i++)
             {
                 tasks[i] = new Task((object obj) =>
                 {
-                    var j = (int)obj;
+                    var data = (TaskData)obj;
                     try
                     {
-                        ApplyHorizontalSymmetry(image, j * step, (j + 1) * step, height);
+                        ApplyHorizontalSymmetry(data.Image);
+                        list[data.I] = data.Image;
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine(ex);
                     }
-                }, i);
+                }, new TaskData(list[i], i));
 
                 tasks[i].Start();
 
             }
 
             Task.WaitAll(tasks);
+            stopwatch.Stop();
+            Debug.WriteLine($"Tasks horizontal symmetry - " + stopwatch.ElapsedMilliseconds);
 
             tasks = new Task[_parallelProcessNum];
-            var orignal = new Bitmap(image);
-            var width = image.Width;
 
+            stopwatch = Stopwatch.StartNew();
             for (int i = 0; i < tasks.Length; i++)
             {
                 tasks[i] = new Task((object obj) =>
                 {
-                    var j = (int)obj;
+                    var data = (TaskData)obj;
                     try
                     {
-                        ApplyCyclicShift(image,_shift, j * step, (j + 1) * step, height, width, orignal);
+                        ApplyCyclicShift(data.Image);
+                        list[data.I] = data.Image;
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine(ex);
                     }
-                }, i);
+                }, new TaskData(list[i], i));
 
                 tasks[i].Start();
 
             }
 
             Task.WaitAll(tasks);
+            stopwatch.Stop();
+            Debug.WriteLine("Tasks shift - " + stopwatch.ElapsedMilliseconds);
+
+            for (var i = 0; i < _parallelProcessNum; i++)
+            {
+                for (var y = 0; y < height; y++)
+                {
+                    for (var x = 0; x < step; x++)
+                    {
+                        image.SetPixel(x + i * step, y, list[i].GetPixel(x, y));
+                    }
+                }
+
+                list[i].Dispose();
+            }
         }
 
-        private void ApplyNegative(Bitmap image, int startX, int endX, int height)
+        private void ApplyNegative(Bitmap image)
         {
-            for (int y = 0; y < height; y++)
+            for (int y = 0; y < image.Height; y++)
             {
-                for (int x = startX; x < endX; x++)
+                for (int x = 0; x < image.Width; x++)
                 {
-                    lock (image)
-                    {
-                        var pixel = image.GetPixel(x, y);
-                        image.SetPixel(x, y, Color.FromArgb(255, 255 - pixel.R, 255 - pixel.G, 255 - pixel.B));
-                    }
+                    var pixel = image.GetPixel(x, y);
+                    image.SetPixel(x, y, Color.FromArgb(255, 255 - pixel.R, 255 - pixel.G, 255 - pixel.B));
                 }
             }
         }
 
-        private void ApplyHorizontalSymmetry(Bitmap image, int startX, int endX, int height)
+        private void ApplyHorizontalSymmetry(Bitmap image)
         {
-            for (int y = 0; y < (height / 2); y++)
+            for (int y = 0; y < (image.Height / 2); y++)
             {
-                for (int x = startX; x < endX; x++)
+                for (int x = 0; x < image.Width; x++)
                 {
-                    lock (image)
-                    {
-                        var pixel1 = image.GetPixel(x, y);
-                        var pixel2 = image.GetPixel(x, height - 1 - y);
-                        image.SetPixel(x, y, pixel2);
-                        image.SetPixel(x, height - 1 - y, pixel1);
-                    }
+                    var pixel1 = image.GetPixel(x, y);
+                    var pixel2 = image.GetPixel(x, image.Height - 1 - y);
+                    image.SetPixel(x, y, pixel2);
+                    image.SetPixel(x, image.Height - 1 - y, pixel1);
                 }
             }
         }
 
-        private void ApplyCyclicShift(Bitmap image, int shift, int startX, int endX, int height, int width, Bitmap temp)
+        private void ApplyCyclicShift(Bitmap image)
         {
-            shift = shift % width;
-            /*Bitmap temp = new Bitmap(image);*/
+            var shift = _shift % image.Height;
+            var temp = new Bitmap(image);
 
-            for (int y = 0; y < height; y++)
+            for (int x = 0; x < image.Width; x++)
             {
-                for (int x = startX; x < endX; x++)
-                {   
-                    int newX = (x + shift) % width;
-                    if (newX < 0)
-                        newX += width;
+                for (int y = 0; y < image.Height; y++)
+                {
+                    int newY = (y + shift) % image.Height;
+                    if (newY < 0)
+                        newY += image.Height;
 
-                    
-                    lock (image)
-                    {
-                        lock (temp)
-                        {
-                            Color color = temp.GetPixel(x, y);
-                            image.SetPixel(newX, y, color);
-                        }
-                    }
+                    var color = temp.GetPixel(x, y);
+                    image.SetPixel(x, newY, color);
                 }
             }
         }
